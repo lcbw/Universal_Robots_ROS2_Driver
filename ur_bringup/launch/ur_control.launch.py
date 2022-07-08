@@ -227,6 +227,8 @@ def generate_launch_description():
     control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
+        remappings=[('m_ft_sensor_wrench', 'the_measured_ur_sensor_wrench'),
+        ],
         parameters=[robot_description, robot_controllers],
         output={
             "stdout": "screen",
@@ -256,6 +258,7 @@ def generate_launch_description():
                     "force_torque_sensor_broadcaster",
                     "joint_state_broadcaster",
                     "speed_scaling_state_broadcaster",
+                    "cartesian_force_controller",
                 ]
             },
         ],
@@ -308,6 +311,15 @@ def generate_launch_description():
             "/controller_manager",
         ],
     )
+    
+    cartesian_force_controller_spawner = Node(
+     package="controller_manager",
+     executable="spawner.py",
+     arguments=["cartesian_force_controller", 
+     "--controller-manager", 
+     "/controller_manager", ],
+    )
+
 
     robot_controller_spawner = Node(
         package="controller_manager",
@@ -325,6 +337,7 @@ def generate_launch_description():
         io_and_status_controller_spawner,
         speed_scaling_state_broadcaster_spawner,
         force_torque_sensor_broadcaster_spawner,
+        cartesian_force_controller_spawner,
         robot_controller_spawner,
     ]
 
