@@ -259,6 +259,7 @@ def generate_launch_description():
                     "joint_state_broadcaster",
                     "speed_scaling_state_broadcaster",
                     "cartesian_force_controller",
+                    "cartesian_compliance_controller",
                 ]
             },
         ],
