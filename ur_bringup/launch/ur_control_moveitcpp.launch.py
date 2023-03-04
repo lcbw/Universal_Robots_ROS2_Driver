@@ -17,14 +17,14 @@
 import os
 
 import yaml
-from ament_index_python.packages import get_package_share_directory
+from yaml import Loader
 from launch import LaunchDescription
+from ament_index_python.packages import get_package_share_directory
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-
 
 def load_yaml(package_name, file_path):
     package_path = get_package_share_directory(package_name)
@@ -74,6 +74,21 @@ def generate_launch_description():
     # General arguments
     declared_arguments.append(
         DeclareLaunchArgument(
+            "runtime_config_package",
+            default_value="ur_bringup",
+            description='Package with the controller\'s configuration in "config" folder. \
+        Usually the argument is not set, it enables use of a custom setup.',
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "controllers_file",
+            default_value="ur_controllers.yaml",
+            description="YAML file with the controllers configuration.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
             "description_package",
             default_value="ur_description",
             description="Description package with robot URDF/XACRO files. Usually the argument \
@@ -85,21 +100,6 @@ def generate_launch_description():
             "description_file",
             default_value="ur.urdf.xacro",
             description="URDF/XACRO description file with the robot.",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "moveit_config_package",
-            default_value="ur_moveit_config",
-            description="MoveIt config package with robot SRDF/XACRO files. Usually the argument \
-        is not set, it enables use of a custom moveit config.",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "moveit_config_file",
-            default_value="ur.srdf.xacro",
-            description="MoveIt SRDF/XACRO description file with the robot.",
         )
     )
     declared_arguments.append(
@@ -127,9 +127,31 @@ def generate_launch_description():
         )
     )
     declared_arguments.append(
+        DeclareLaunchArgument(
+            "robot_controller",
+            default_value="joint_trajectory_controller",
+            description="Robot controller to start.",
+        )
+    )
+    declared_arguments.append(
         DeclareLaunchArgument("launch_rviz", default_value="true", description="Launch RViz?")
     )
 
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "moveit_config_package",
+            default_value="ur_moveit_config",
+            description="MoveIt config package with robot SRDF/XACRO files. Usually the argument \
+        is not set, it enables use of a custom moveit config.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "moveit_config_file",
+            default_value="ur.srdf.xacro",
+            description="MoveIt SRDF/XACRO description file with the robot.",
+        )
+    )
     # Initialize Arguments
     ur_type = LaunchConfiguration("ur_type")
     robot_ip = LaunchConfiguration("robot_ip")
@@ -137,14 +159,18 @@ def generate_launch_description():
     safety_pos_margin = LaunchConfiguration("safety_pos_margin")
     safety_k_position = LaunchConfiguration("safety_k_position")
     # General arguments
+    runtime_config_package = LaunchConfiguration("runtime_config_package")
+    controllers_file = LaunchConfiguration("controllers_file")
     description_package = LaunchConfiguration("description_package")
     description_file = LaunchConfiguration("description_file")
-    moveit_config_package = LaunchConfiguration("moveit_config_package")
-    moveit_config_file = LaunchConfiguration("moveit_config_file")
     prefix = LaunchConfiguration("prefix")
     use_fake_hardware = LaunchConfiguration("use_fake_hardware")
     fake_sensor_commands = LaunchConfiguration("fake_sensor_commands")
+    robot_controller = LaunchConfiguration("robot_controller")
     launch_rviz = LaunchConfiguration("launch_rviz")
+    moveit_config_package = LaunchConfiguration("moveit_config_package")
+    moveit_config_file = LaunchConfiguration("moveit_config_file")
+
 
     joint_limit_params = PathJoinSubstitution(
         [FindPackageShare(description_package), "config", ur_type, "joint_limits.yaml"]
@@ -199,9 +225,7 @@ def generate_launch_description():
             safety_k_position,
             " ",
             "name:=",
-            # Also ur_type parameter could be used but then the planning group names in yaml
-            # configs has to be updated!
-            "ur10e",
+            ur_type,
             " ",
             "script_filename:=",
             script_filename,
@@ -224,6 +248,14 @@ def generate_launch_description():
         ]
     )
     robot_description = {"robot_description": robot_description_content}
+
+    robot_controllers = PathJoinSubstitution(
+        [FindPackageShare(runtime_config_package), "config", controllers_file]
+    )
+
+    rviz_config_file = PathJoinSubstitution(
+        [FindPackageShare(description_package), "rviz", "view_robot.rviz"]
+    )
 
     # MoveIt Configuration
     robot_description_semantic_content = Command(
@@ -257,7 +289,7 @@ def generate_launch_description():
             "start_state_max_bounds_error": 0.1,
         }
     }
-    ompl_planning_yaml = load_yaml("ur_moveit_config", "config/ompl_planning.yaml")
+    ompl_planning_yaml = load_yaml("ur_moveit_config", "config/ompl_planning_cpp.yaml")
     ompl_planning_pipeline_config["move_group"].update(ompl_planning_yaml)
 
     # Trajectory Execution Configuration
@@ -290,67 +322,71 @@ def generate_launch_description():
         },
     }
 
-    # Start the actual move_group node/action server
-    move_group_node = Node(
-        package="moveit_ros_move_group",
-        executable="move_group",
-        output="screen",
-        parameters=[
-            robot_description,
-            robot_description_semantic,
-            robot_description_kinematics,
-            ompl_planning_pipeline_config,
-            trajectory_execution,
-            moveit_controllers,
-            planning_scene_monitor_parameters,
-        ],
-    )
+    moveit_cpp_config = yaml.load("""
+          planning_scene_monitor_options:
+            name: "planning_scene_monitor"
+            robot_description: "robot_description"
+            joint_state_topic: "/joint_states"
+            attached_collision_object_topic: "/moveit_cpp/planning_scene_monitor"
+            publish_planning_scene_topic: "/moveit_cpp/publish_planning_scene"
+            monitored_planning_scene_topic: "/moveit_cpp/monitored_planning_scene"
+            wait_for_initial_state_timeout: 10.0
 
-    # Warehouse mongodb server
-    mongodb_server_node = Node(
-        package="warehouse_ros_mongo",
-        executable="mongo_wrapper_ros.py",
-        parameters=[
-            {"warehouse_port": 33829},
-            {"warehouse_host": "localhost"},
-            {"warehouse_plugin": "warehouse_ros_mongo::MongoDatabaseConnection"},
-        ],
-        output="screen",
-    )
+          planning_pipelines:
+            #namespace: "moveit_cpp"  # optional, default is ~
+            pipeline_names: ["ompl"]
 
-    # rviz with moveit configuration
-    rviz_config_file = PathJoinSubstitution(
-        [FindPackageShare(moveit_config_package), "rviz", "view_robot.rviz"]
-    )
-    rviz_node = Node(
-        package="rviz2",
-        condition=IfCondition(launch_rviz),
-        executable="rviz2",
-        name="rviz2_moveit",
-        output="log",
-        arguments=["-d", rviz_config_file],
-        parameters=[
-            robot_description,
-            robot_description_semantic,
-            ompl_planning_pipeline_config,
-            robot_description_kinematics,
-        ],
-    )
+          plan_request_params:
+            planning_time: 10.0
+            planner_id: "this_is_it"
+            planning_attempts: 3
+            planning_pipeline: ompl
+            max_velocity_scaling_factor: 0.5
+            max_acceleration_scaling_factor: 0.5
 
-    # Static TF
-    static_tf = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="static_transform_publisher",
-        output="log",
-        arguments=["0.0", "0.0", "0.0", "0.0", "0.0", "0.0", "world", "base_link"],
-    )
+          # octomap parameters (when used)
+          octomap_frame: base_link
+          octomap_resolution: 0.01
+          max_range: 5.0""", Loader=Loader)
+    ## moved these up for cleaner definition
+    myworkcell_node = Node(
+          name='myworkcell_node',
+          package='myworkcell_core',
+          executable='myworkcell_node',
+          output='screen',
+          parameters=[
+              robot_description,
+              robot_description_semantic,
+              robot_description_kinematics,
+              ompl_planning_pipeline_config,
+                  {
+                      'base_frame': 'world',
+  #                    'robot_description_planning' : joint_limits_config,
+                      'planning_pipelines': ['ompl'],
+                  },
+              moveit_cpp_config,
+              moveit_controllers,
+              trajectory_execution,
+              planning_scene_monitor_parameters,
+              ],
+          )
 
+    fake_ar_publisher_node = Node(
+          name='fake_ar_publisher_node',
+          package='fake_ar_publisher',
+          executable='fake_ar_publisher_node',
+          output='screen',
+      )
+    vision_node = Node(
+          name='vision_node',
+          package='myworkcell_core',
+          executable='vision_node',
+          output='screen',
+      )
     nodes_to_start = [
-        move_group_node,
-        mongodb_server_node,
-        rviz_node,
-        static_tf,
+    myworkcell_node,
+    fake_ar_publisher_node,
+    vision_node
     ]
 
     return LaunchDescription(declared_arguments + nodes_to_start)
